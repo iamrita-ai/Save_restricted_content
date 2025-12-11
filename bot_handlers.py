@@ -1274,21 +1274,9 @@ async def handle_private_messages(client: Client, message: Message):
         "📞 **Support:** @technicalserena"
     )
 
-# ==================== ERROR HANDLER ====================
-@bot.on_error()
-async def error_handler(client: Client, error: Exception):
-    """Handle errors"""
-    logger.error(f"Bot error: {error}")
-    
-    # Log error to channel
-    try:
-        await send_log_to_channel(
-            bot, 
-            f"Bot Error: {str(error)[:200]}", 
-            "ERROR"
-        )
-    except:
-        pass
+# ==================== ERROR HANDLING ====================
+# Note: @bot.on_error() is deprecated in Pyrogram v2
+# We'll use try-except blocks in main function instead
 
 # ==================== BOT STARTUP ====================
 async def main():
@@ -1324,10 +1312,29 @@ async def main():
         
     except Exception as e:
         logger.error(f"Bot startup failed: {e}")
+        
+        # Log error to channel
+        try:
+            await send_log_to_channel(
+                bot,
+                f"Bot startup error: {str(e)[:200]}",
+                "ERROR"
+            )
+        except:
+            pass
     finally:
-        await bot.stop()
-        logger.info("Bot stopped")
+        try:
+            await bot.stop()
+            logger.info("Bot stopped")
+        except:
+            pass
 
 # This allows the bot to be imported without automatically running
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+            
