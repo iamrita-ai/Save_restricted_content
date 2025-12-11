@@ -964,13 +964,306 @@ async def callback_handler(client: Client, callback_query: CallbackQuery):
         await callback_query.answer("Error occurred!", show_alert=True)
 
 # ==================== MESSAGE HANDLERS ====================
-@bot.on_message(filters.private & ~filters.command())
+@bot.on_message(filters.command("setting") & filters.private)
+async def setting_command(client: Client, message: Message):
+    """Handle /setting command"""
+    user_id = message.from_user.id
+    
+    # Get current settings
+    set_chat_id = get_user_setting(user_id, "set_chat_id", "Not set")
+    button_text = get_user_setting(user_id, "button_text", "Serena")
+    
+    # Create settings text
+    settings_text = (
+        "⚙️ **Bot Settings**\n\n"
+        "Configure your bot preferences:\n\n"
+        f"📨 **Set Chat ID:** `{set_chat_id}`\n"
+        f"   • Files will be sent to this chat\n\n"
+        f"🔘 **Button Text:** `{button_text}`\n"
+        f"   • Toggle between Serena/Kumari"
+    )
+    
+    # Create inline keyboard
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📨 Set Chat ID", callback_data="set_chat_id"),
+            InlineKeyboardButton(f"🔘 {button_text}", callback_data="toggle_button")
+        ],
+        [
+            InlineKeyboardButton("🔄 Reset", callback_data="reset_settings"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings")
+        ]
+    ])
+    
+    await message.reply_text(settings_text, reply_markup=keyboard)
+
+# ==================== ADMIN COMMANDS ====================
+@bot.on_message(filters.command("addpremium") & filters.private)
+async def add_premium_command(client: Client, message: Message):
+    """Handle /addpremium command (owner only)"""
+    user_id = message.from_user.id
+    
+    # Check if user is owner
+    if user_id not in Config.OWNER_IDS:
+        await message.reply_text("❌ This command is for owners only!")
+        return
+    
+    # Check command format
+    if len(message.command) < 3:
+        await message.reply_text(
+            "📝 **Usage:** `/addpremium <user_id> <days>`\n\n"
+            "**Example:** `/addpremium 1234567890 12`"
+        )
+        return
+    
+    try:
+        target_user_id = int(message.command[1])
+        days = int(message.command[2])
+        
+        add_premium_user(target_user_id, days)
+        
+        await message.reply_text(
+            f"✅ **Premium Added!**\n\n"
+            f"**User ID:** `{target_user_id}`\n"
+            f"**Days:** `{days}`\n"
+            f"**Expiry:** `{(datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d %H:%M')}`"
+        )
+        
+        # Log to channel
+        log_msg = (
+            f"Premium user added\n"
+            f"By: {user_id}\n"
+            f"User: {target_user_id}\n"
+            f"Days: {days}"
+        )
+        await send_log_to_channel(bot, log_msg, "PREMIUM_ADD")
+        
+    except ValueError:
+        await message.reply_text("❌ Invalid user ID or days format!")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+@bot.on_message(filters.command("removepremium") & filters.private)
+async def remove_premium_command(client: Client, message: Message):
+    """Handle /removepremium command (owner only)"""
+    user_id = message.from_user.id
+    
+    # Check if user is owner
+    if user_id not in Config.OWNER_IDS:
+        await message.reply_text("❌ This command is for owners only!")
+        return
+    
+    # Check command format
+    if len(message.command) < 2:
+        await message.reply_text(
+            "📝 **Usage:** `/removepremium <user_id>`\n\n"
+            "**Example:** `/removepremium 1234567890`"
+        )
+        return
+    
+    try:
+        target_user_id = int(message.command[1])
+        
+        remove_premium_user(target_user_id)
+        
+        await message.reply_text(
+            f"✅ **Premium Removed!**\n\n"
+            f"**User ID:** `{target_user_id}`"
+        )
+        
+        # Log to channel
+        log_msg = (
+            f"Premium user removed\n"
+            f"By: {user_id}\n"
+            f"User: {target_user_id}"
+        )
+        await send_log_to_channel(bot, log_msg, "PREMIUM_REMOVE")
+        
+    except ValueError:
+        await message.reply_text("❌ Invalid user ID format!")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+# ==================== CALLBACK QUERY HANDLERS ====================
+@bot.on_callback_query()
+async def callback_handler(client: Client, callback_query: CallbackQuery):
+    """Handle inline keyboard callbacks"""
+    user_id = callback_query.from_user.id
+    data = callback_query.data
+    
+    try:
+        # Check force subscription
+        if data == "check_force_sub":
+            if await check_force_sub(user_id):
+                await callback_query.message.delete()
+                await start_command(client, callback_query.message)
+            else:
+                keyboard = await get_force_sub_keyboard()
+                await callback_query.message.edit_text(
+                    "⚠️ **Please join our channel first!**\n\n"
+                    "Join the channel and click 'Try Again':",
+                    reply_markup=keyboard
+                )
+            await callback_query.answer()
+            return
+        
+        # Help callback
+        if data == "help":
+            await help_command(client, callback_query.message)
+            await callback_query.answer()
+            return
+        
+        # Set Chat ID
+        if data == "set_chat_id":
+            await callback_query.message.edit_text(
+                "📨 **Set Chat ID**\n\n"
+                "Send the Chat ID where you want files to be sent:\n\n"
+                "**Format:**\n"
+                "• Your User ID: `1234567890`\n"
+                "• Channel ID: `-1001234567890`\n\n"
+                "**Note:** Use your own ID or a channel you manage."
+            )
+            
+            try:
+                chat_id_msg = await client.listen(
+                    user_id, 
+                    filters.text & filters.private, 
+                    timeout=60
+                )
+                
+                try:
+                    chat_id = int(chat_id_msg.text)
+                    update_user_setting(user_id, "set_chat_id", chat_id)
+                    
+                    await callback_query.message.edit_text(
+                        f"✅ **Chat ID Set!**\n\n"
+                        f"Files will now be sent to: `{chat_id}`"
+                    )
+                    
+                except ValueError:
+                    await callback_query.message.edit_text(
+                        "❌ **Invalid Chat ID!**\n\n"
+                        "Please send a numeric Chat ID."
+                    )
+                    
+            except asyncio.TimeoutError:
+                await callback_query.message.edit_text(
+                    "⏰ **Timeout!**\n\n"
+                    "Please use `/setting` again."
+                )
+            
+            await callback_query.answer()
+            return
+        
+        # Toggle button text
+        if data == "toggle_button":
+            current_text = get_user_setting(user_id, "button_text", "Serena")
+            new_text = "Kumari" if current_text == "Serena" else "Serena"
+            update_user_setting(user_id, "button_text", new_text)
+            
+            await callback_query.message.edit_text(
+                f"✅ **Button Text Updated!**\n\n"
+                f"Changed to: **{new_text}**\n\n"
+                "Use `/setting` to configure other options."
+            )
+            await callback_query.answer()
+            return
+        
+        # Reset settings
+        if data == "reset_settings":
+            settings_collection.delete_many({"user_id": user_id})
+            
+            await callback_query.message.edit_text(
+                "✅ **Settings Reset!**\n\n"
+                "All settings have been reset to defaults."
+            )
+            await callback_query.answer()
+            return
+        
+        # Close settings
+        if data == "close_settings":
+            await callback_query.message.delete()
+            await callback_query.answer("Settings closed")
+            return
+        
+        # Task status
+        if data.startswith("status_"):
+            task_id = ObjectId(data.replace("status_", ""))
+            task = batch_tasks_collection.find_one({"_id": task_id})
+            
+            if task and task["user_id"] == user_id:
+                status_emoji = {
+                    "queued": "⏳",
+                    "processing": "⚙️",
+                    "completed": "✅",
+                    "failed": "❌",
+                    "cancelled": "🚫"
+                }.get(task.get("status", "unknown"), "❓")
+                
+                status_text = (
+                    f"📊 **Task Status**\n\n"
+                    f"**ID:** `{task_id}`\n"
+                    f"**Status:** {status_emoji} {task.get('status', 'unknown').upper()}\n"
+                    f"**Progress:** {task.get('progress', 0)} / {task.get('count', 0)}\n"
+                    f"**Successful:** {task.get('successful', 0)}\n"
+                    f"**Failed:** {task.get('failed', 0)}"
+                )
+                
+                await callback_query.message.edit_text(status_text)
+            else:
+                await callback_query.answer("Task not found!", show_alert=True)
+            
+            await callback_query.answer()
+            return
+        
+        # Cancel task
+        if data.startswith("cancel_"):
+            task_id = ObjectId(data.replace("cancel_", ""))
+            task = batch_tasks_collection.find_one({"_id": task_id})
+            
+            if task and task["user_id"] == user_id:
+                if task.get("status") in ["queued", "processing"]:
+                    batch_tasks_collection.update_one(
+                        {"_id": task_id},
+                        {"$set": {"status": "cancelled"}}
+                    )
+                    
+                    await callback_query.message.edit_text(
+                        f"✅ **Task Cancelled!**\n\n"
+                        f"Task ID: `{task_id}`"
+                    )
+                    
+                    # Log to channel
+                    log_msg = f"User {user_id} cancelled task {task_id}"
+                    await send_log_to_channel(bot, log_msg, "TASK_CANCELLED")
+                else:
+                    await callback_query.answer("Task cannot be cancelled!", show_alert=True)
+            else:
+                await callback_query.answer("Task not found!", show_alert=True)
+            
+            await callback_query.answer()
+            return
+        
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
+        await callback_query.answer("Error occurred!", show_alert=True)
+
+# ==================== MESSAGE HANDLERS ====================
+# List of all commands to filter non-command messages
+ALL_COMMANDS = ["start", "help", "login", "batch", "status", "cancel", 
+                "setting", "addpremium", "removepremium"]
+
+@bot.on_message(filters.private & ~filters.command(ALL_COMMANDS))
 async def handle_private_messages(client: Client, message: Message):
     """Handle non-command private messages"""
     user_id = message.from_user.id
     
     # Ignore if message is from bot itself
     if message.from_user.is_self:
+        return
+    
+    # Ignore if message doesn't have text
+    if not message.text:
         return
     
     # Send generic response
@@ -1038,6 +1331,3 @@ async def main():
 # This allows the bot to be imported without automatically running
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-    
