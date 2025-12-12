@@ -6,6 +6,7 @@ import subprocess
 import signal
 import atexit
 import time
+import threading
 
 app = Flask(__name__)
 
@@ -22,11 +23,10 @@ logger = logging.getLogger(__name__)
 
 # Global variable for bot process
 bot_process = None
-bot_script_path = "bot_runner.py"
 
-# Bot runner script (separate file में create करेंगे)
-bot_script = '''
-import asyncio
+def create_bot_script():
+    """Create the bot runner script with correct Pyrogram v2 syntax"""
+    bot_script = '''import asyncio
 import os
 import sys
 import logging
@@ -39,8 +39,10 @@ logging.basicConfig(
 )
 
 async def run_bot():
-    """Bot को run करता है"""
+    """Main bot runner function"""
     try:
+        # Import inside function to avoid circular imports
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
         from bot_handlers import bot
         
         # Check required environment variables
@@ -53,18 +55,21 @@ async def run_bot():
         
         logging.info("Starting Telegram Bot...")
         
-        # Bot start करो
+        # Start the bot
         await bot.start()
         
-        # Bot details log करो
+        # Get bot info
         me = await bot.get_me()
         logging.info(f"✅ Bot started successfully!")
         logging.info(f"🤖 Bot Username: @{me.username}")
         logging.info(f"🆔 Bot ID: {me.id}")
         
-        # Bot को running रखो
-        await bot.run_until_disconnected()
+        # Keep the bot running (Pyrogram v2 uses idle())
+        from pyrogram import idle
+        await idle()
         
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user")
     except Exception as e:
         logging.error(f"Bot error: {str(e)}")
         import traceback
@@ -72,56 +77,51 @@ async def run_bot():
     finally:
         try:
             await bot.stop()
-            logging.info("Bot stopped")
+            logging.info("Bot stopped gracefully")
         except:
             pass
 
 if __name__ == "__main__":
-    # Fix for asyncio event loop
+    # Set event loop policy for Windows compatibility
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     
+    # Run the bot
     try:
-        # Run the bot
         asyncio.run(run_bot())
     except KeyboardInterrupt:
-        logging.info("Bot stopped by user")
+        logging.info("Bot process terminated")
     except Exception as e:
-        logging.error(f"Fatal error: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
+        logging.error(f"Fatal error in bot process: {e}")
 '''
-
-def create_bot_script():
-    """Bot runner script create करता है"""
+    
     try:
-        with open(bot_script_path, "w") as f:
+        with open("bot_runner.py", "w") as f:
             f.write(bot_script)
-        logger.info(f"Created bot script: {bot_script_path}")
+        logger.info("Created bot runner script")
         return True
     except Exception as e:
         logger.error(f"Failed to create bot script: {e}")
         return False
 
 def start_bot():
-    """Bot process start करता है"""
+    """Start the bot in a separate process"""
     global bot_process
     
-    # पहले existing process को stop करो
+    # Stop existing bot process if running
     stop_bot()
     
-    # Bot script create करो
+    # Create the bot runner script
     if not create_bot_script():
         return False
     
     try:
         logger.info("Starting bot process...")
         
-        # Bot को separate process में run करो
+        # Start bot in separate process
         env = os.environ.copy()
-        
         bot_process = subprocess.Popen(
-            [sys.executable, bot_script_path],
+            [sys.executable, "bot_runner.py"],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -130,100 +130,101 @@ def start_bot():
             universal_newlines=True
         )
         
-        # Bot process output read करने के लिए thread start करो
-        import threading
-        
-        def read_bot_output():
+        # Function to read bot output
+        def read_output():
             while True:
                 if bot_process is None:
                     break
-                    
+                
                 line = bot_process.stdout.readline()
                 if not line and bot_process.poll() is not None:
                     break
                 
                 if line:
-                    # Bot logs को Flask logs में add करो
-                    logger.info(f"🤖 {line.strip()}")
+                    # Clean the line and log it
+                    clean_line = line.strip()
+                    if clean_line:
+                        logger.info(f"🤖 {clean_line}")
         
-        output_thread = threading.Thread(target=read_bot_output, daemon=True)
+        # Start output reader thread
+        output_thread = threading.Thread(target=read_output, daemon=True)
         output_thread.start()
         
-        # Bot startup check करो
-        time.sleep(5)
+        # Wait for bot to start
+        time.sleep(3)
         
         if bot_process.poll() is None:
-            logger.info(f"✅ Bot process started (PID: {bot_process.pid})")
+            logger.info(f"✅ Bot process started successfully (PID: {bot_process.pid})")
             return True
         else:
-            logger.error("Bot process failed to start")
+            logger.error("❌ Bot process failed to start")
             return False
             
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
+        logger.error(f"Failed to start bot process: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
 
 def stop_bot():
-    """Bot process stop करता है"""
+    """Stop the bot process"""
     global bot_process
     
     if bot_process:
         logger.info(f"Stopping bot process (PID: {bot_process.pid})...")
         
         try:
-            # Process को terminate करो
+            # Send SIGTERM
             bot_process.terminate()
             
-            # Wait for process to end
-            for _ in range(10):  # 10 seconds max
+            # Wait for process to terminate
+            for _ in range(10):
                 if bot_process.poll() is not None:
                     break
                 time.sleep(1)
             else:
                 # Force kill if not terminated
                 bot_process.kill()
-                
-            bot_process.wait()
-            logger.info("Bot process stopped")
+                bot_process.wait()
             
+            logger.info("Bot process stopped")
         except Exception as e:
             logger.error(f"Error stopping bot: {e}")
         
         bot_process = None
     
-    # Bot script file delete करो
+    # Clean up bot runner file
     try:
-        if os.path.exists(bot_script_path):
-            os.remove(bot_script_path)
+        if os.path.exists("bot_runner.py"):
+            os.remove("bot_runner.py")
+            logger.debug("Cleaned up bot runner script")
     except:
         pass
 
 def cleanup():
-    """App shutdown पर cleanup करता है"""
-    logger.info("Cleaning up...")
+    """Cleanup on exit"""
+    logger.info("Shutting down...")
     stop_bot()
 
-# Cleanup handlers register करो
+# Register cleanup
 atexit.register(cleanup)
 
 # Flask routes
 @app.route('/')
 def home():
-    bot_alive = bot_process and bot_process.poll() is None
+    bot_status = "running" if bot_process and bot_process.poll() is None else "stopped"
     return jsonify({
         "status": "online",
         "service": "Telegram File Recovery Bot",
-        "bot_status": "running" if bot_alive else "stopped",
-        "bot_pid": bot_process.pid if bot_process else None,
-        "endpoints": ["/", "/health", "/bot-status", "/start-bot", "/stop-bot"]
+        "bot_status": bot_status,
+        "endpoints": ["/", "/health", "/bot-status", "/restart-bot"]
     })
 
 @app.route('/health')
 def health():
     return jsonify({
         "status": "healthy",
+        "bot_alive": bot_process is not None and bot_process.poll() is None,
         "timestamp": time.time()
     })
 
@@ -231,32 +232,29 @@ def health():
 def bot_status():
     if bot_process:
         return jsonify({
-            "running": bot_process.poll() is None,
             "pid": bot_process.pid,
-            "returncode": bot_process.poll()
+            "alive": bot_process.poll() is None,
+            "return_code": bot_process.poll()
         })
-    return jsonify({"running": False})
+    return jsonify({"status": "not_running"})
 
-@app.route('/start-bot')
-def start_bot_endpoint():
-    if start_bot():
-        return jsonify({"success": True, "message": "Bot started"})
-    return jsonify({"success": False, "message": "Failed to start bot"})
-
-@app.route('/stop-bot')
-def stop_bot_endpoint():
+@app.route('/restart-bot')
+def restart_bot():
     stop_bot()
-    return jsonify({"success": True, "message": "Bot stopped"})
+    time.sleep(2)
+    if start_bot():
+        return jsonify({"success": True, "message": "Bot restarted"})
+    return jsonify({"success": False, "message": "Failed to restart bot"})
 
-# App initialization
+# Initialize bot on startup
 def initialize():
-    """App initialize होते ही bot start करता है"""
+    """Initialize the application"""
     logger.info("=" * 60)
     logger.info("🚀 Telegram File Recovery Bot Server")
     logger.info("=" * 60)
     
-    # Environment variables check करो
-    logger.info("Checking environment...")
+    # Check environment variables
+    logger.info("Checking environment variables...")
     
     env_vars = {
         'API_ID': os.environ.get('API_ID'),
@@ -268,9 +266,9 @@ def initialize():
     all_set = True
     for key, value in env_vars.items():
         if value:
-            # Sensitive data mask करो
+            # Mask sensitive data
             if key in ['BOT_TOKEN', 'API_HASH', 'MONGO_URL']:
-                display = value[:8] + "****" if len(value) > 12 else "***"
+                display = value[:10] + "..." if len(value) > 15 else "***"
             else:
                 display = value
             logger.info(f"✓ {key}: {display}")
@@ -279,25 +277,26 @@ def initialize():
             all_set = False
     
     if not all_set:
-        logger.error("❌ Missing environment variables!")
-    else:
-        logger.info("✅ All environment variables are set")
+        logger.error("❌ Missing required environment variables!")
+        return False
     
-    # Bot start करो
-    logger.info("Starting bot in 3 seconds...")
-    time.sleep(3)
+    logger.info("✅ All environment variables are set")
     
-    if start_bot():
-        logger.info("✅ Bot startup initiated")
-    else:
-        logger.error("❌ Bot startup failed")
+    # Start the bot
+    logger.info("Starting bot in 2 seconds...")
+    time.sleep(2)
+    
+    return start_bot()
 
-# Application entry point
+# App initialization
 if __name__ == "__main__":
     # Initialize and start bot
-    initialize()
+    if initialize():
+        logger.info("✅ Bot startup initiated successfully")
+    else:
+        logger.error("❌ Bot initialization failed")
     
-    # Flask app run करो
+    # Start Flask app
     port = int(os.environ.get("PORT", 10000))
     logger.info(f"Starting Flask server on port {port}")
     
@@ -308,14 +307,13 @@ if __name__ == "__main__":
         use_reloader=False
     )
 else:
-    # For WSGI (production)
+    # For WSGI servers (production)
     logger.info("WSGI server detected")
     
-    # Bot start करो (delay के साथ)
-    import threading
+    # Start bot in background thread
     def delayed_start():
         time.sleep(5)
         initialize()
     
-    thread = threading.Thread(target=delayed_start, daemon=True)
-    thread.start()
+    bot_thread = threading.Thread(target=delayed_start, daemon=True)
+    bot_thread.start()
