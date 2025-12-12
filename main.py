@@ -4,6 +4,7 @@ import logging
 import sys
 import threading
 import time
+import asyncio
 
 app = Flask(__name__)
 
@@ -17,61 +18,42 @@ logger = logging.getLogger(__name__)
 # Global variables
 bot_running = False
 
-def start_bot():
-    """Start Telegram bot"""
-    global bot_running
-    
+def run_bot_async():
+    """Run bot with proper event loop handling"""
     try:
-        logger.info("🚀 Initializing Telegram Bot...")
+        # Create new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
-        # Import bot handlers
-        from bot_handlers import bot
+        # Now import and run bot
+        from bot_handlers import main as bot_main
         
-        logger.info("Starting bot...")
+        logger.info("🤖 Starting Telegram Bot...")
         
-        # Run bot
-        import asyncio
-        
-        async def run():
-            await bot.start()
-            logger.info("✅ Bot started successfully!")
-            
-            # Get bot info
-            me = await bot.get_me()
-            logger.info(f"🤖 Username: @{me.username}")
-            logger.info(f"🆔 ID: {me.id}")
-            
-            # Send startup log
-            from bot_handlers import send_log_to_channel
-            try:
-                await send_log_to_channel(
-                    bot,
-                    f"🚀 Bot Started!\nUsername: @{me.username}\nID: {me.id}",
-                    "STARTUP"
-                )
-            except:
-                pass
-            
-            bot_running = True
-            
-            # Keep bot running
-            from pyrogram import idle
-            await idle()
-        
-        # Run bot
-        asyncio.run(run())
+        # Run the bot
+        loop.run_until_complete(bot_main())
         
     except Exception as e:
         logger.error(f"❌ Bot failed: {e}")
         import traceback
         logger.error(traceback.format_exc())
-    finally:
-        bot_running = False
 
-def run_bot_in_thread():
-    """Run bot in separate thread"""
-    bot_thread = threading.Thread(target=start_bot, daemon=True)
-    bot_thread.start()
+def start_bot():
+    """Start bot in background thread"""
+    global bot_running
+    
+    try:
+        # Run bot in separate thread
+        bot_thread = threading.Thread(target=run_bot_async, daemon=True)
+        bot_thread.start()
+        
+        # Wait and check
+        time.sleep(5)
+        bot_running = True
+        logger.info("✅ Bot started successfully!")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to start bot thread: {e}")
 
 @app.route('/')
 def home():
@@ -93,7 +75,7 @@ def health():
 @app.route('/start-bot')
 def start_bot_endpoint():
     """Manually start bot"""
-    run_bot_in_thread()
+    start_bot()
     return jsonify({"message": "Bot start requested"})
 
 if __name__ == "__main__":
@@ -102,26 +84,31 @@ if __name__ == "__main__":
     logger.info("🚀 TELEGRAM FILE RECOVERY BOT v2.0")
     logger.info("=" * 60)
     
-    # Check environment
-    env_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN']
+    # Check environment variables
+    env_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN', 'MONGO_URL']
     
+    all_set = True
     for var in env_vars:
         value = os.environ.get(var)
         if value:
-            if var in ['BOT_TOKEN', 'API_HASH']:
+            if var in ['BOT_TOKEN', 'API_HASH', 'MONGO_URL']:
                 masked = value[:8] + "..." + value[-4:] if len(value) > 12 else "***"
                 logger.info(f"✓ {var}: {masked}")
             else:
                 logger.info(f"✓ {var}: {value}")
         else:
             logger.error(f"✗ {var}: NOT SET")
+            all_set = False
     
-    # Start bot
-    logger.info("Starting bot in 3 seconds...")
-    time.sleep(3)
-    run_bot_in_thread()
+    if all_set:
+        # Start bot
+        logger.info("Starting bot in 3 seconds...")
+        time.sleep(3)
+        start_bot()
+    else:
+        logger.error("❌ Missing required environment variables!")
     
-    # Start Flask
+    # Start Flask server
     port = int(os.environ.get("PORT", 10000))
     logger.info(f"Starting Flask server on port {port}")
     
