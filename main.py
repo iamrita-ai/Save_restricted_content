@@ -992,8 +992,8 @@ async def handle_phone_number(msg: Message):
 
     try:
         await user_client.connect()
-        # force_sms=True se SMS + in-app dono try honge
-        sent = await user_client.send_code(phone, force_sms=True)
+        # Yahan se `force_sms` hata diya gaya hai
+        sent = await user_client.send_code(phone)
         pending_logins[user_id] = {
             "client": user_client,
             "phone": phone,
