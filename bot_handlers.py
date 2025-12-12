@@ -1336,49 +1336,62 @@ async def handle_private_messages(client: Client, message: Message):
 # We'll use try-except blocks in main function instead
 
 # ==================== BOT STARTUP ====================
+# ==================== BOT STARTUP ====================
 async def main():
     """Main function to run the bot"""
-    logger.info("Starting bot...")
-    
-    # Check environment variables
-    required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN', 'MONGO_URL']
-    missing_vars = [var for var in required_vars if not getattr(Config, var, None)]
-    
-    if missing_vars:
-        logger.error(f"Missing environment variables: {missing_vars}")
-        return
-    
     try:
+        logger.info("=" * 50)
+        logger.info("🤖 Starting Telegram File Recovery Bot")
+        logger.info("=" * 50)
+        
+        # Check environment variables
+        required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN', 'MONGO_URL']
+        
+        logger.info("Checking environment variables...")
+        for var in required_vars:
+            value = getattr(Config, var, None)
+            if value:
+                # Mask sensitive values in logs
+                if var in ['BOT_TOKEN', 'API_HASH', 'MONGO_URL']:
+                    display = str(value)[:8] + "..." if len(str(value)) > 12 else "***"
+                else:
+                    display = value
+                logger.info(f"✓ {var}: {display}")
+            else:
+                logger.error(f"✗ {var}: NOT SET")
+        
+        logger.info("Attempting to start bot...")
+        
+        # Start the bot
         await bot.start()
-        logger.info("✅ Bot started successfully!")
         
         # Get bot info
         me = await bot.get_me()
-        logger.info(f"🤖 Bot Username: @{me.username}")
-        logger.info(f"🆔 Bot ID: {me.id}")
+        logger.info("✅ Bot started successfully!")
+        logger.info(f"🤖 Username: @{me.username}")
+        logger.info(f"🆔 ID: {me.id}")
+        logger.info(f"📛 First Name: {me.first_name}")
         
         # Send startup message to log channel
-        await send_log_to_channel(
-            bot,
-            f"Bot started!\nUsername: @{me.username}\nID: {me.id}",
-            "STARTUP"
-        )
-        
-        # Keep bot running
-        await idle()
-        
-    except Exception as e:
-        logger.error(f"Bot startup failed: {e}")
-        
-        # Log error to channel
         try:
             await send_log_to_channel(
                 bot,
-                f"Bot startup error: {str(e)[:200]}",
-                "ERROR"
+                f"Bot started!\nUsername: @{me.username}\nID: {me.id}",
+                "STARTUP"
             )
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not send log to channel: {e}")
+        
+        logger.info("Bot is now running and listening for messages...")
+        
+        # Keep the bot running
+        from pyrogram import idle
+        await idle()
+        
+    except Exception as e:
+        logger.error(f"❌ Bot startup failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
     finally:
         try:
             await bot.stop()
@@ -1388,10 +1401,10 @@ async def main():
 
 # This allows the bot to be imported without automatically running
 if __name__ == "__main__":
+    # Run the bot
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-            
