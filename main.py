@@ -1240,16 +1240,18 @@ async def finalize_batch_record(
 
 
 async def handle_batch_count(msg: Message):
+async def handle_batch_count(msg: Message):
     user_id = msg.from_user.id
     text = (msg.text or "").strip()
 
+    # ---- count parse ----
     try:
         count = int(text)
     except ValueError:
         await msg.reply_text("Sirf integer number bhejiye, jaan. 💕")
         return
 
-    max_limit = await get_max_batch_limit(user_id)
+    max_limit = await get_max_batch_limit(user_id)  # free=50, premium/owner=1000
 
     if count <= 0:
         await msg.reply_text("Number 1 se zyada hona chahiye. 🌸")
@@ -1261,6 +1263,7 @@ async def handle_batch_count(msg: Message):
         )
         count = max_limit
 
+    # ---- state check ----
     state = batch_states.get(user_id)
     if not state or not state.get("link"):
         await msg.reply_text("Link wali step missing hai. /batch se dobara start karein. ♻️")
@@ -1270,15 +1273,19 @@ async def handle_batch_count(msg: Message):
     link = state["link"]
     is_private = state.get("is_private", True)
 
-    if is_private:
-        doc = await get_user_doc(user_id)
-        if not doc.get("session_string"):
-            await msg.reply_text(
-                "Ye private link hai. Isko access karne ke liye pehle /login karna hoga. 🔐"
-            )
-            batch_states.pop(user_id, None)
-            return
+    # ---- session check ----
+    doc = await get_user_doc(user_id)
+    has_session = bool(doc.get("session_string"))
 
+    # Agar link private hai (t.me/c/…) aur session nahi hai -> /login required
+    if is_private and not has_session:
+        await msg.reply_text(
+            "Ye private link hai. Isko access karne ke liye pehle /login karna hoga. 🔐"
+        )
+        batch_states.pop(user_id, None)
+        return
+
+    # ---- task id & history ----
     task_id = datetime.utcnow().isoformat()
     batch_states[user_id] = {
         "step": "running",
@@ -1289,9 +1296,16 @@ async def handle_batch_count(msg: Message):
 
     await add_history_entry(user_id, task_id, link, count)
 
-    if is_private:
+    # ---- worker choose logic ----
+    # IMPORTANT PART:
+    # Agar user logged-in hai (session_string present) to har link
+    # (public + private dono) user ke session se clone hoga.
+    # Is case me bot ko us channel/group ka member/admin hone ki zarurat nahi.
+    if has_session:
+        # User session se clone (ANY channel/group jahan user member hai)
         task = asyncio.create_task(batch_worker_private(user_id, link, count, task_id))
     else:
+        # Session nahi hai -> sirf public channels bot ke through try honge
         task = asyncio.create_task(batch_worker_public(user_id, link, count, task_id))
 
     batch_tasks[user_id] = task
