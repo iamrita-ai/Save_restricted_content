@@ -885,46 +885,47 @@ async def callback_handler(client: Client, callback_query: CallbackQuery):
             return
         
         # Set Chat ID
-        if data == "set_chat_id":
+        # Set Chat ID callback में ये change करें:
+if data == "set_chat_id":
+    await callback_query.message.edit_text(
+        "📨 **Set Chat ID**\n\n"
+        "Send the Chat ID where you want files to be sent:\n\n"
+        "**Format:**\n"
+        "• Your User ID: `1234567890`\n"
+        "• Channel ID: `-1001234567890`\n\n"
+        "**Note:** Use your own ID or a channel you manage."
+    )
+    
+    try:
+        # wait_for() का use करें
+        chat_id_msg = await client.wait_for(
+            filters.text & filters.private & filters.user(user_id),
+            timeout=60
+        )
+        
+        try:
+            chat_id = int(chat_id_msg.text)
+            update_user_setting(user_id, "set_chat_id", chat_id)
+            
             await callback_query.message.edit_text(
-                "📨 **Set Chat ID**\n\n"
-                "Send the Chat ID where you want files to be sent:\n\n"
-                "**Format:**\n"
-                "• Your User ID: `1234567890`\n"
-                "• Channel ID: `-1001234567890`\n\n"
-                "**Note:** Use your own ID or a channel you manage."
+                f"✅ **Chat ID Set!**\n\n"
+                f"Files will now be sent to: `{chat_id}`"
             )
             
-            try:
-                chat_id_msg = await client.listen(
-                    user_id, 
-                    filters.text & filters.private, 
-                    timeout=60
-                )
-                
-                try:
-                    chat_id = int(chat_id_msg.text)
-                    update_user_setting(user_id, "set_chat_id", chat_id)
-                    
-                    await callback_query.message.edit_text(
-                        f"✅ **Chat ID Set!**\n\n"
-                        f"Files will now be sent to: `{chat_id}`"
-                    )
-                    
-                except ValueError:
-                    await callback_query.message.edit_text(
-                        "❌ **Invalid Chat ID!**\n\n"
-                        "Please send a numeric Chat ID."
-                    )
-                    
-            except asyncio.TimeoutError:
-                await callback_query.message.edit_text(
-                    "⏰ **Timeout!**\n\n"
-                    "Please use `/setting` again."
-                )
+        except ValueError:
+            await callback_query.message.edit_text(
+                "❌ **Invalid Chat ID!**\n\n"
+                "Please send a numeric Chat ID."
+            )
             
-            await callback_query.answer()
-            return
+    except asyncio.TimeoutError:
+        await callback_query.message.edit_text(
+            "⏰ **Timeout!**\n\n"
+            "Please use `/setting` again."
+        )
+    
+    await callback_query.answer()
+    return
         
         # Toggle button text
         if data == "toggle_button":
