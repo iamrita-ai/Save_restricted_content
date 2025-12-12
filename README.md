@@ -84,3 +84,24 @@ Render ya local `.env` me:
    flask
    qrcode
    Pillow
+
+
+3. Render pe Web Service create karein:
+Environment: Python
+Start command: python main.py
+4. Env vars set karein: API_ID, API_HASH, BOT_TOKEN, MONGO_URI, optional START_IMAGE_URL.
+5. Logs channel create karein (ID: -1003286415377 as per code), bot ko us channel me add karein.
+Service deploy karein.
+Usage Flow
+1. Owner:
+Bot se DM: /start
+Apne liye premium: /addpremium <your_user_id> 365
+2. User:
+DM me /login → method choose karein (Session/Phone+OTP/QR)
+Jis account se login kiya, usi account ko required private/public channels/groups me join karao.
+3. Clone:
+DM ya group me: /batch
+Channel/group ke message ka link paste karein (https://t.me/... ya https://t.me/c/...)
+Message count bhejein (e.g. 50)
+Bot har message sequentially clone karega, progress header update karega.
+Notes
