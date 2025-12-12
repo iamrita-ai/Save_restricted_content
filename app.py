@@ -1,4 +1,4 @@
-# app.py - Fixed port binding issue
+# app.py - Fixed Flask 2.3+ compatibility
 from flask import Flask, request, jsonify
 import threading
 import asyncio
@@ -19,7 +19,8 @@ def home():
     return jsonify({
         "status": "running",
         "service": "Serena File Recovery Bot",
-        "port": 10000
+        "port": 10000,
+        "flask_version": "2.3+ compatible"
     })
 
 @app.route('/health')
@@ -36,9 +37,8 @@ def run_bot():
         import traceback
         traceback.print_exc()
 
-@app.before_first_request
-def initialize():
-    """Initialize bot on first request"""
+def start_bot_thread():
+    """Start bot thread on app startup"""
     global bot_running, bot_thread
     
     if not bot_running:
@@ -48,9 +48,14 @@ def initialize():
         bot_thread.start()
         print("Bot thread started successfully")
 
+# Start bot thread when app starts (Flask 2.3+ compatible)
+with app.app_context():
+    start_bot_thread()
+
 if __name__ == "__main__":
-    # Initialize bot
-    initialize()
+    # Start bot thread if not already started
+    if not bot_running:
+        start_bot_thread()
     
     # Start Flask app on port 10000
     port = int(os.environ.get("PORT", 10000))
