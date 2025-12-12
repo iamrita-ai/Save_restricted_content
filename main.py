@@ -1401,6 +1401,167 @@ async def process_one_message(
     error_count_ref: List[int],
     media_count_ref: List[int],
 ):
+    """
+    Ye function:
+    - Text + caption (jisme links bhi ho) nikalta hai
+    - Agar media hai to PHOTO, VIDEO, DOCUMENT, AUDIO, ANIMATION, STICKER, VOICE, VIDEO_NOTE sabko download karke bhejta hai
+    - Har sent msg ko Set Chat ID aur Logs channel me forward bhi karta hai
+    """
+
+    # ---------- TEXT / CAPTION ----------
+    text = src_msg.text or src_msg.caption or ""
+    text = replace_serena_text(text, replace_flag)
+    if not text:
+        text = "(empty message)"
+
+    sent: Optional[Message] = None
+
+    # ---------- MEDIA TYPES CHECK ----------
+    has_media = any(
+        [
+            bool(src_msg.photo),
+            bool(src_msg.video),
+            bool(src_msg.document),
+            bool(src_msg.animation),
+            bool(src_msg.sticker),
+            bool(src_msg.audio),
+            bool(src_msg.voice),
+            bool(src_msg.video_note),
+        ]
+    )
+
+    if has_media:
+        # File name guess (sirf progress text ke liye, real name download ke time milega)
+        if src_msg.document and src_msg.document.file_name:
+            file_name = src_msg.document.file_name
+        elif src_msg.video and src_msg.video.file_name:
+            file_name = src_msg.video.file_name
+        elif src_msg.audio and src_msg.audio.file_name:
+            file_name = src_msg.audio.file_name
+        else:
+            file_name = "Media file"
+
+        # Initial progress msg
+        progress_msg = await bot.send_message(
+            user_id,
+            f"📥 Downloading\n\n{file_name}\nto my server\n[○○○○○○○○○○○○○○○○○○○○]",
+        )
+
+        start_time = time.time()
+        last_holder = {"time": 0.0}
+
+        def progress(current: int, total: int):
+            loop = asyncio.get_event_loop()
+            loop.create_task(
+                update_progress_message(
+                    progress_msg,
+                    file_name,
+                    current,
+                    total,
+                    start_time,
+                    last_holder,
+                )
+            )
+
+        try:
+            # File ko temp_dir ke andar save kare (SERENA_ prefix ke sath)
+            dl_base = os.path.join(temp_dir, "SERENA_")
+            file_path = await src_client.download_media(
+                src_msg, file_name=dl_base, progress=progress
+            )
+        except Exception:
+            error_count_ref[0] += 1
+            return
+        else:
+            if not file_path or not os.path.exists(file_path) or not os.path.isfile(file_path):
+                error_count_ref[0] += 1
+                return
+            else:
+                media_count_ref[0] += 1
+
+                # Final 100% update (best-effort)
+                try:
+                    size = os.path.getsize(file_path)
+                    await update_progress_message(
+                        progress_msg,
+                        file_name,
+                        size,
+                        size,
+                        start_time,
+                        {"time": 0.0},
+                    )
+                except Exception:
+                    pass
+
+                # Ab media ko user ko bhejo (as document – har type ke liye safe)
+                try:
+                    try:
+                        sent = await bot.send_document(
+                            chat_id=user_id,
+                            document=file_path,
+                            caption=text or None,
+                        )
+                        downloaded_count_ref[0] += 1
+                    except RPCError:
+                        sent = None
+                        error_count_ref[0] += 1
+
+                    # Agar Set Chat ID diya gaya hai to wahan forward
+                    if sent and set_chat_id:
+                        try:
+                            await bot.forward_messages(
+                                chat_id=set_chat_id,
+                                from_chat_id=user_id,
+                                message_ids=sent.id,
+                            )
+                        except RPCError:
+                            pass
+
+                    # Logs channel me bhi forward
+                    if sent:
+                        try:
+                            await bot.forward_messages(
+                                chat_id=LOGS_CHANNEL_ID,
+                                from_chat_id=user_id,
+                                message_ids=sent.id,
+                            )
+                        except RPCError:
+                            pass
+                finally:
+                    # Disk se media delete
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass
+
+    else:
+        # ---------- SIRF TEXT / LINKS ----------
+        try:
+            sent = await bot.send_message(user_id, text)
+            downloaded_count_ref[0] += 1
+        except RPCError:
+            sent = None
+            error_count_ref[0] += 1
+
+        if sent and set_chat_id:
+            try:
+                await bot.forward_messages(
+                    chat_id=set_chat_id,
+                    from_chat_id=user_id,
+                    message_ids=sent.id,
+                )
+            except RPCError:
+                pass
+
+        if sent:
+            try:
+                await bot.forward_messages(
+                    chat_id=LOGS_CHANNEL_ID,
+                    from_chat_id=user_id,
+                    message_ids=sent.id,
+                )
+            except RPCError:
+                pass
     text = src_msg.text or src_msg.caption or ""
     text = replace_serena_text(text, replace_flag)
     if not text:
