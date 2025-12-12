@@ -2,6 +2,7 @@ pyrogram==2.0.106
 tgcrypto==1.2.5
 pymongo==4.5.0
 motor==3.3.2
-flask==3.0.0
+flask==2.3.3  # Explicit version that's known to work
 aiofiles==23.2.1
 python-dotenv==1.0.0
+gunicorn==21.2.0  # For production deployment
