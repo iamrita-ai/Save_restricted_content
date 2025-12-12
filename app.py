@@ -1,42 +1,57 @@
-# app.py
-from flask import Flask, request
+# app.py - 修復端口綁定問題
+from flask import Flask, request, jsonify
 import threading
 import asyncio
-from bot_handlers import bot, start_bot
+import os
+import sys
+
+# 添加當前目錄到PATH
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__)
 
-# Global variable to track if bot is running
+# 全局變量
 bot_running = False
+bot_thread = None
 
 @app.route('/')
 def home():
-    return "Bot is running on Render!"
+    return jsonify({
+        "status": "running",
+        "service": "Serena File Recovery Bot",
+        "port": 10000
+    })
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    # You can add a webhook endpoint here if needed later
-    return 'OK', 200
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"}), 200
 
-def run_bot_in_thread():
-    """Function to run the bot in a separate thread."""
-    global bot_running
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def run_bot():
+    """在新的線程中運行機器人"""
     try:
-        loop.run_until_complete(start_bot())
+        from bot_handlers import start_bot
+        asyncio.run(start_bot())
     except Exception as e:
-        print(f"Bot stopped with error: {e}")
-    finally:
-        bot_running = False
+        print(f"Bot error: {e}")
+        import traceback
+        traceback.print_exc()
+
+@app.before_first_request
+def initialize():
+    """在第一次請求時初始化機器人"""
+    global bot_running, bot_thread
+    
+    if not bot_running:
+        print("Starting bot in background thread...")
+        bot_running = True
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
+        print("Bot thread started successfully")
 
 if __name__ == "__main__":
-    # Start the bot in a background thread when the Flask app starts
-    if not bot_running:
-        bot_running = True
-        bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
-        bot_thread.start()
-        print("Bot thread started.")
+    # 初始化機器人
+    initialize()
     
-    # Run Flask app on all interfaces, port 10000 (as required by Render)
-    app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
+    # 啟動Flask應用，指定端口10000
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
