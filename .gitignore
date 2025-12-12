@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+.venv
+
+# Session files
+*.session
+*.session-journal
+user_sessions/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Render
+render.yaml
