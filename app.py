@@ -1,16 +1,16 @@
-# app.py - 修復端口綁定問題
+# app.py - Fixed port binding issue
 from flask import Flask, request, jsonify
 import threading
 import asyncio
 import os
 import sys
 
-# 添加當前目錄到PATH
+# Add current directory to PATH
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__)
 
-# 全局變量
+# Global variables
 bot_running = False
 bot_thread = None
 
@@ -27,7 +27,7 @@ def health():
     return jsonify({"status": "healthy"}), 200
 
 def run_bot():
-    """在新的線程中運行機器人"""
+    """Run bot in a new thread"""
     try:
         from bot_handlers import start_bot
         asyncio.run(start_bot())
@@ -38,7 +38,7 @@ def run_bot():
 
 @app.before_first_request
 def initialize():
-    """在第一次請求時初始化機器人"""
+    """Initialize bot on first request"""
     global bot_running, bot_thread
     
     if not bot_running:
@@ -49,9 +49,9 @@ def initialize():
         print("Bot thread started successfully")
 
 if __name__ == "__main__":
-    # 初始化機器人
+    # Initialize bot
     initialize()
     
-    # 啟動Flask應用，指定端口10000
+    # Start Flask app on port 10000
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
