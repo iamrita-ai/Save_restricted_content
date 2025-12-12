@@ -200,7 +200,7 @@ async def help_command(client: Client, message: Message):
 
 @bot.on_message(filters.command("login") & filters.private)
 async def login_command(client: Client, message: Message):
-    """Handle /login command"""
+    """Handle /login command - दूसरे Telegram account से login करने के लिए"""
     user_id = message.from_user.id
     
     # Check if already logged in
@@ -211,22 +211,27 @@ async def login_command(client: Client, message: Message):
         )
         return
     
-    # Ask for phone number
     await message.reply_text(
         "📱 **Login Process**\n\n"
-        "Please send your phone number in international format:\n"
-        "Example: `+919876543210`\n\n"
-        "⚠️ **Note:** This should be the phone number of your lost Telegram account."
+        "Please send the phone number of the Telegram account that has access to the channel.\n"
+        "**Format:** `+919876543210` (international format with + sign)\n\n"
+        "⚠️ **Note:** This should be ANY Telegram account that can access the channel, not necessarily your lost account."
     )
     
     try:
-        # Wait for phone number
-        phone_msg = await client.listen(
-            user_id, 
-            filters.text & filters.private, 
-            timeout=300
-        )
-        phone_number = phone_msg.text.strip()
+        # Wait for phone number using wait_for()
+        try:
+            phone_msg = await client.wait_for(
+                filters.text & filters.private & filters.user(user_id),
+                timeout=300
+            )
+            phone_number = phone_msg.text.strip()
+        except asyncio.TimeoutError:
+            await message.reply_text(
+                "⏰ Login timeout!\n"
+                "Please try `/login` again."
+            )
+            return
         
         # Validate phone number
         if not phone_number.startswith("+"):
@@ -237,7 +242,7 @@ async def login_command(client: Client, message: Message):
             )
             return
         
-        # Create user client
+        # Create user client for the account that will access the channel
         user_client = Client(
             f"user_{user_id}",
             api_id=Config.API_ID,
@@ -250,28 +255,39 @@ async def login_command(client: Client, message: Message):
         # Send code request
         try:
             sent_code = await user_client.send_code(phone_number)
-        except Exception as e:
             await message.reply_text(
-                f"❌ Error sending code: {str(e)}\n"
-                "Please check the phone number and try again."
+                "✅ Verification code sent to the phone number!\n\n"
+                "Please enter the **OTP** you received (like `12345`):"
             )
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "phone number invalid" in error_msg:
+                await message.reply_text(
+                    "❌ Invalid phone number!\n"
+                    "Please check the number and try again with `/login`."
+                )
+            else:
+                await message.reply_text(
+                    f"❌ Error: {str(e)}\n"
+                    "Please try `/login` again."
+                )
             await user_client.disconnect()
             return
         
-        # Ask for OTP
-        await message.reply_text(
-            "✅ Verification code sent!\n\n"
-            "Please enter the **OTP** you received (like `12345`):\n\n"
-            "⚠️ **Note:** If you have 2FA enabled, you'll be asked for password after OTP."
-        )
-        
-        # Wait for OTP
-        otp_msg = await client.listen(
-            user_id, 
-            filters.text & filters.private, 
-            timeout=300
-        )
-        otp_code = otp_msg.text.strip()
+        # Wait for OTP using wait_for()
+        try:
+            otp_msg = await client.wait_for(
+                filters.text & filters.private & filters.user(user_id),
+                timeout=300
+            )
+            otp_code = otp_msg.text.strip()
+        except asyncio.TimeoutError:
+            await message.reply_text(
+                "⏰ OTP timeout!\n"
+                "Please try `/login` again."
+            )
+            await user_client.disconnect()
+            return
         
         # Try to sign in
         try:
@@ -281,64 +297,104 @@ async def login_command(client: Client, message: Message):
                 phone_code=otp_code
             )
         except Exception as e:
+            error_msg = str(e).lower()
+            
             # Check if password is needed
-            if "SESSION_PASSWORD_NEEDED" in str(e):
+            if "session_password_needed" in error_msg or "password" in error_msg:
                 await message.reply_text(
                     "🔐 **2FA Password Required**\n\n"
                     "Please enter your Telegram 2FA password:"
                 )
                 
-                # Wait for password
-                password_msg = await client.listen(
-                    user_id, 
-                    filters.text & filters.private, 
-                    timeout=300
-                )
-                
+                # Wait for password using wait_for()
                 try:
-                    await user_client.check_password(password_msg.text)
-                except Exception as pass_err:
+                    password_msg = await client.wait_for(
+                        filters.text & filters.private & filters.user(user_id),
+                        timeout=300
+                    )
+                    password = password_msg.text
+                    
+                    try:
+                        await user_client.check_password(password)
+                    except Exception as pass_err:
+                        await message.reply_text(
+                            f"❌ Password error: {str(pass_err)}\n"
+                            "Please try `/login` again."
+                        )
+                        await user_client.disconnect()
+                        return
+                except asyncio.TimeoutError:
                     await message.reply_text(
-                        f"❌ Password error: {str(pass_err)}\n"
+                        "⏰ Password timeout!\n"
                         "Please try `/login` again."
                     )
                     await user_client.disconnect()
                     return
+            elif "phone_code_expired" in error_msg:
+                await message.reply_text(
+                    "❌ OTP expired!\n"
+                    "Please try `/login` again to get a new OTP."
+                )
+                await user_client.disconnect()
+                return
+            elif "phone_code_invalid" in error_msg:
+                await message.reply_text(
+                    "❌ Invalid OTP!\n"
+                    "Please try `/login` again."
+                )
+                await user_client.disconnect()
+                return
             else:
                 await message.reply_text(
-                    f"❌ Login failed: {str(e)}\n"
+                    f"❌ Login failed: {str(e)[:100]}\n"
                     "Please try `/login` again."
                 )
                 await user_client.disconnect()
                 return
         
         # Save session string
-        session_string = await user_client.export_session_string()
-        save_user_session(user_id, session_string)
+        try:
+            session_string = await user_client.export_session_string()
+            save_user_session(user_id, session_string)
+            
+            # Store client in memory
+            user_clients[user_id] = user_client
+            
+            # Get account info
+            account_info = await user_client.get_me()
+            account_name = account_info.first_name or account_info.username or "User"
+            
+            await message.reply_text(
+                f"✅ **Login Successful!**\n\n"
+                f"**Account:** {account_name}\n"
+                f"**Username:** @{account_info.username if account_info.username else 'N/A'}\n"
+                f"**Phone:** {phone_number[:4]}******\n\n"
+                "Your session has been saved.\n"
+                "You can now use `/batch` to recover files from channels.\n\n"
+                "⚠️ **Note:** Don't share your session string with anyone!"
+            )
+            
+            # Send log to channel (masked phone number)
+            masked_phone = phone_number[:4] + "****" + phone_number[-3:]
+            log_msg = (
+                f"User {user_id} logged in with account:\n"
+                f"• Name: {account_name}\n"
+                f"• Username: @{account_info.username if account_info.username else 'N/A'}\n"
+                f"• Phone: {masked_phone}"
+            )
+            await send_log_to_channel(bot, log_msg, "LOGIN")
+            
+        except Exception as e:
+            await message.reply_text(
+                f"❌ Error saving session: {str(e)[:100]}\n"
+                "Please try `/login` again."
+            )
+            await user_client.disconnect()
+            return
         
-        # Store client in memory
-        user_clients[user_id] = user_client
-        
-        await message.reply_text(
-            "✅ **Login Successful!**\n\n"
-            "Your session has been saved.\n"
-            "You can now use `/batch` to recover files.\n\n"
-            "⚠️ **Note:** Don't share your session string with anyone!"
-        )
-        
-        # Send log to channel (masked phone number)
-        masked_phone = phone_number[:4] + "****" + phone_number[-3:]
-        log_msg = f"User {user_id} logged in with phone: {masked_phone}"
-        await send_log_to_channel(bot, log_msg, "LOGIN")
-        
-    except asyncio.TimeoutError:
-        await message.reply_text(
-            "⏰ Login timeout!\n"
-            "Please try `/login` again."
-        )
     except Exception as e:
         await message.reply_text(
-            f"❌ Login error: {str(e)}\n"
+            f"❌ Login error: {str(e)[:100]}\n"
             "Please try `/login` again."
         )
         logger.error(f"Login error: {e}")
