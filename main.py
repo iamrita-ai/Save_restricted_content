@@ -132,25 +132,38 @@ def format_timedelta(td: timedelta) -> str:
 
 def parse_telegram_link(link: str) -> Tuple[Any, int]:
     """
-    t.me link -> (chat_identifier, message_id)
-    - Public: https://t.me/username/123  => ("username", 123)
-    - Private: https://t.me/c/123456789/123 => (-100123456789, 123)
+    devgagan ke E(L) ki tarah robust parser:
+    - Public:  https://t.me/username/123           => ("username", 123)
+    - Public topics/comments: https://t.me/user/12/34 => ("user", 34)
+    - Private: https://t.me/c/123456789/123        => (-100123456789, 123)
+    - Private topics: https://t.me/c/123456789/12/34 => (-100123456789, 34)
     """
+
     link = link.strip()
     if not link.startswith("http"):
         link = "https://" + link.lstrip("/")
 
-    m = re.search(r"t\.me/c/(\d+)/(\d+)", link)
-    if m:
-        internal_id = int(m.group(1))
-        msg_id = int(m.group(2))
-        chat_id = int("-100" + str(internal_id))
+    # Private: /c/<internal_id>/(<topic_id>/)?<msg_id>
+    private_match = re.match(
+        r'https?://(t\.me|telegram\.me)/c/(\d+)/(?:\d+/)?(\d+)',
+        link
+    )
+
+    # Public: /<username>/(<topic_id>/)?<msg_id>
+    public_match = re.match(
+        r'https?://(t\.me|telegram\.me)/([^/]+)/(?:\d+/)?(\d+)',
+        link
+    )
+
+    if private_match:
+        internal_id = private_match.group(2)
+        msg_id = int(private_match.group(3))
+        chat_id = int("-100" + internal_id)
         return chat_id, msg_id
 
-    m = re.search(r"t\.me/([A-Za-z0-9_]+)/(\d+)", link)
-    if m:
-        username = m.group(1)
-        msg_id = int(m.group(2))
+    elif public_match:
+        username = public_match.group(2)
+        msg_id = int(public_match.group(3))
         return username, msg_id
 
     raise ValueError("Invalid Telegram message link")
