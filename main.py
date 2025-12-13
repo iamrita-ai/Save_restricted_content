@@ -1493,6 +1493,91 @@ async def on_plain_text(client: Client, msg: Message):
 # ===================== main.py (PART 4/4) =====================
 import os  # for file path operations
 
+async def robust_get_message(
+    u_client: Client,
+    chat_identifier: Any,
+    msg_id: int,
+) -> Optional[Message]:
+    """
+    devgagan ke get_msg ki tarah robust fetch:
+    - Public/private dono ke liye multiple chat_id formats try karta hai
+    - Dialogs refresh karke old/migrated groups ka access better banata hai
+    """
+
+    last_exc: Optional[Exception] = None
+
+    # dialogs warm-up
+    try:
+        async for _ in u_client.get_dialogs(limit=50):
+            break
+    except Exception:
+        pass
+
+    candidates: List[Any] = []
+
+    # Agar int id mila
+    if isinstance(chat_identifier, int):
+        s = str(chat_identifier)
+        if s.startswith("-100"):
+            base_id = s[4:]
+            try:
+                candidates.append(int(s))              # -100xxxx
+                candidates.append(int("-" + base_id)) # -xxxx
+            except ValueError:
+                candidates.append(chat_identifier)
+        elif s.startswith("-"):
+            base_id = s[1:]
+            try:
+                candidates.append(chat_identifier)       # -xxxx
+                candidates.append(int("-100" + base_id)) # -100xxxx
+            except ValueError:
+                candidates.append(chat_identifier)
+        else:
+            # positive numeric? try -100id and -id
+            try:
+                candidates.append(int("-100" + s))
+            except ValueError:
+                pass
+            try:
+                candidates.append(int("-" + s))
+            except ValueError:
+                pass
+    else:
+        # username string
+        candidates.append(chat_identifier)
+
+    # Unique rakho
+    seen = set()
+    final_candidates = []
+    for cid in candidates:
+        if cid not in seen:
+            seen.add(cid)
+            final_candidates.append(cid)
+
+    # Try all candidates
+    for cid in final_candidates:
+        try:
+            msg = await u_client.get_messages(cid, msg_id)
+            if msg and not getattr(msg, "empty", False):
+                return msg
+        except Exception as e:
+            last_exc = e
+            continue
+
+    # Final fallback: dialogs expand + original identifier
+    try:
+        async for _ in u_client.get_dialogs(limit=200):
+            break
+        msg = await u_client.get_messages(chat_identifier, msg_id)
+        if msg and not getattr(msg, "empty", False):
+            return msg
+    except Exception as e:
+        last_exc = e
+
+    if last_exc:
+        raise last_exc
+    return None
+
 # ---------- PROGRESS BAR HELPER ----------
 async def update_progress_message(
     progress_msg: Message,
@@ -1848,21 +1933,11 @@ async def batch_worker_private(user_id: int, dest_chat_id: int, link: str, count
 
         await user_app.start()
 
-        try:
-            await user_app.get_chat(chat_identifier)
-        except (PeerIdInvalid, ChannelPrivate, ChatIdInvalid, RPCError) as e:
-            await bot.send_message(
-                dest_chat_id,
-                "⚠️ Aapka /login wala account is channel/group ko access nahi kar paa raha.\n"
-                "Ensure karein ki wahi account (jisse aapne /login kiya) us channel/group me joined ho.\n"
-                f"Telegram error: {e}",
-            )
-            status = "error"
-            return
-
+        # DM me batch header send + pin
         header = await bot.send_message(
             user_id,
-            "🔰 SERENA Batch Start ho raha hai...\nMain tumhari yaadein wapas la rahi hoon, thoda sa intezaar karo jaan. 💞",
+            "🔰 SERENA Batch Start ho raha hai...\n"
+            "Main tumhari yaadein wapas la rahi hoon, thoda sa intezaar karo jaan. 💞",
         )
         try:
             await bot.pin_chat_message(user_id, header.id, disable_notification=True)
@@ -1871,24 +1946,27 @@ async def batch_worker_private(user_id: int, dest_chat_id: int, link: str, count
 
         await update_batch_header_msg(user_id, header, link, 0, count, "Starting 💞")
 
+        # Source chat me start message ko pin karne ki koshish (agar allowed)
         try:
             await user_app.pin_chat_message(chat_identifier, start_msg_id, disable_notification=True)
         except (ChatAdminRequired, ChatWriteForbidden, RPCError):
             pass
 
+        # MAIN LOOP: robust_get_message ka use
         for i in range(count):
             msg_id = start_msg_id + i
 
             try:
-                src_msg = await user_app.get_messages(chat_identifier, msg_id)
+                src_msg = await robust_get_message(user_app, chat_identifier, msg_id)
             except FloodWait as e:
                 await asyncio.sleep(e.value + 1)
                 try:
-                    src_msg = await user_app.get_messages(chat_identifier, msg_id)
+                    src_msg = await robust_get_message(user_app, chat_identifier, msg_id)
                 except Exception:
                     error_count[0] += 1
                     continue
-            except Exception:
+            except Exception as e:
+                # Agar yahan bhi PeerIdInvalid etc. aata hai, direct error_count++
                 error_count[0] += 1
                 continue
 
